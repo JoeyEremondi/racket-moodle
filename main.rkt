@@ -14,7 +14,34 @@
 (define current-moodle-ident-field (make-parameter 'email))
 
 ;; Moodle Course ID for the course you're dealing with
-(define current-courseid (make-parameter "33282"))
+(define current-courseid (make-parameter 33282))
+
+;; Take a jsexpr? and turn it into a sequence of symbol-string pairs
+;; that can be given as an argument to easy-http PUT.
+;; We use concatMap to flatten objects/arrays
+;; json->queryStrings : -> jsexpr? (Listof query-params/c)
+(define (json->queryStrings lvalueStr js)
+  (cond
+    [((listof jsexpr?) js)
+     (append-map (lambda (i)
+                   (json->queryStrings (string-append lvalueStr "[" (~v i) "]") (list-ref js i)))
+                 (range 0 (length js)))]
+    [(hash? js)
+     (append-map (lambda (i)
+                   (json->queryStrings (string-append lvalueStr "[" (symbol->string i) "]") (hash-ref js i)))
+                 (hash-keys js))]
+    [(string? js) (list (cons (string->symbol lvalueStr) js))]
+    ;; Otherwise just make the value-string pair
+    [else (list (cons (string->symbol lvalueStr) (~v js)))]))
+
+(define (json->queryString js)
+  (cond [(hash? js)
+         (append-map
+          (lambda (i) (json->queryStrings (symbol->string i) (hash-ref js i)))
+          (hash-keys js))]
+        [(null? js) '()]
+        [else (error "Query parameters must be JSON dictionary of param names and values")]))
+ 
 
 ;; Post the given moodle function name to the server,
 ;; with a jsonexp? for parameters
@@ -27,24 +54,24 @@
            (moodlewssettingfilter . "true")
            (moodlewssettingfileurl . "true")
            (wstoken . ,(current-token))
-           . ,params)
+           . ,(json->queryString params))
          #:json json)))
 
 ;; Post the given moodle function name to the server,
 ;; in the context of the current course,
 ;; with a jsonexp? for parameters
-(define (urPostCourse function params #:json [json '()])
-  (response-json
-   (post (string-append (current-base-url) "/webservice/rest/server.php")
-         #:params
-         `((moodlewsrestformat . "json")
-           (wsfunction . ,function)
-           (moodlewssettingfilter . "true")
-           (moodlewssettingfileurl . "true")
-           (wstoken . ,(current-token))
-           (courseid . ,(current-courseid))
-           . ,params)
-         #:json json)))
+;; (define (urPostCourse function params #:json [json '()])
+;;   (response-json
+;;    (post (string-append (current-base-url) "/webservice/rest/server.php")
+;;          #:params
+;;          `((moodlewsrestformat . "json")
+;;            (wsfunction . ,function)
+;;            (moodlewssettingfilter . "true")
+;;            (moodlewssettingfileurl . "true")
+;;            (wstoken . ,(current-token))
+;;            (courseid . ,(current-courseid))
+;;            . ,params)
+;;          #:json json)))
 
 
 
@@ -52,7 +79,7 @@
   (urPost
    "mod_assign_get_assignments"
    '()
-   #:json (hasheq 'courseids  (list (current-courseid)))))
+   ))
 
 
 ;; Mapping from email addresses to moodle user ID numbers.
@@ -68,9 +95,9 @@
 ;; make-user-list : -> Hashof StudentNumber MoodleId
 ;; Query the moodle server to get the list of users in the current course
 (define (make-id-dict)
-  (define ulist (urPostCourse
+  (define ulist (urPost
                  "core_enrol_get_enrolled_users"
-                 '()))
+                 (hasheq 'courseid (current-courseid))))
   (for ([rec ulist])
     (hash-set! current-user-ids (hash-ref rec (current-moodle-ident-field))
                (number->string (hash-ref rec 'id)))))
@@ -89,15 +116,16 @@
 ;; Upload the feedback file for the given user
 (define (upload-grade userIdent assignId gradeValue feedbackStr)
   (urPost "mod_assign_save_grade"
-          `((assignmentid . ,assignId)
-            (userid . ,(ident->moodleId userIdent))
-            (grade . ,(number->string gradeValue))
-            (attemptnumber . "-1")
-            (addattempt . "0")
-            (workflowstate . "TODO")
-            (applytoall . "0")
-            )
-          #:json (hasheq 'plugindata (hasheq 'assignfeedbackcomments_editor
-                                             (hasheq 'text feedbackStr 'format 1)) )))
+          (hasheq
+           'assignmentid assignId
+           'userid (ident->moodleId userIdent)
+           'grade  (number->string gradeValue)
+           'attemptnumber  -1
+           'addattempt 0
+           'workflowstate  "TODO"
+           'applytoall  0
+           'plugindata (hasheq 'assignfeedbackcomments_editor
+                               (hasheq 'text feedbackStr 'format 1)) )))
 
 
+;132860
